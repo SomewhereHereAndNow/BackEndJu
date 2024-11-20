@@ -16,6 +16,7 @@ use Razorpay\Api\Api;
 // Start the session
 session_start();
  
+$port = getenv('PORT') ?: 8080;
 
 $razorpayApiKey = "rzp_test_SGmdC8LUxtlgND";   
 $razorpayApiSecret = "T3pymnZ9BZk81wpuoAsLgyOC";  
