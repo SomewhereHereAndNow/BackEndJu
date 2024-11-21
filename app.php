@@ -317,7 +317,17 @@ $app->add(function ($request, $handler) {
 });
 
 // MongoDB connection
-$mongoClient = new MongoClient("mongodb+srv://Maitreya:killdill12@cluster0.sk6ugig.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0");
+$mongoClient = new MongoDB\Client(
+    "mongodb+srv://Maitreya:killdill12@cluster0.sk6ugig.mongodb.net/?retryWrites=true&w=majority",
+    [],
+    [
+        'typeMap' => [
+            'root' => 'array',
+            'document' => 'array',
+        ],
+    ]
+);
+;
 $db = $mongoClient->selectDatabase('my_database');
 $productCollection = $db->selectCollection('products');
 $db1=$mongoClient->selectDatabase('User_Database');
@@ -587,7 +597,9 @@ function seedDatabase($productCollection) {
 
 // GET route for fetching all products
  
-
+$app->options('/api/products',function (Request $request, Response $response){
+    return addCorsHeaders($response)->withHeader('Content-Type', 'application/json');
+});
 $app->get('/api/products', function (Request $request, Response $response) use ($productCollection) {
     $products = $productCollection->find()->toArray();
     $response->getBody()->write(json_encode($products));
@@ -628,49 +640,10 @@ $app->post('/api/products', function ($request,$response) use ($productCollectio
         return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 });
-$app->delete('/api/products/{name}/{type}', function ($request, $response, $args) use ($productCollection) {
-    $productName = $args['name'];  // Get the product name from the URL
-    $productType = $args['type'];  // Get the product type from the URL
+ 
+ 
 
-    try {
-        // Delete the product by its name and type
-        $result = $productCollection->deleteOne([
-            'name' => $productName,
-            'type' => $productType
-        ]);
-
-        if ($result->getDeletedCount() === 1) {
-            $response->getBody()->write(json_encode(['message' => 'Product deleted successfully']));
-            return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
-        } else {
-            $response->getBody()->write(json_encode(['error' => 'Product not found']));
-            return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
-        }
-    } catch (Exception $e) {
-        $response->getBody()->write(json_encode(['error' => 'Error deleting product: ' . $e->getMessage()]));
-        return $response->withStatus(500)->withHeader('Content-Type', 'application/json')
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS,DELETE')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
-    }
-});
-$app->options('/api/products/{name}/{type}', function ($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*') // Allow all origins, adjust as needed
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, DELETE') // Allow DELETE method
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization') // Allow required headers
-        ->withStatus(200); // Return 200 status for OPTIONS request
-});
-
-
-$app->options('/api/products', function($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS,DELETE')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
-});
+ 
 
 // Home route for testing
 $app->get('/', function ($request, $response) {

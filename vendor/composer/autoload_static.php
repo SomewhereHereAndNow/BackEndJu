@@ -132,7 +132,6 @@ class ComposerStaticInit4c2f2a9d77dd459d860cb7df5a18c652
         array (
             'Nyholm\\Psr7\\' => 12,
             'NunoMaduro\\Collision\\' => 21,
-            'Newvendor\\Vendor\\' => 17,
         ),
         'M' => 
         array (
@@ -205,6 +204,10 @@ class ComposerStaticInit4c2f2a9d77dd459d860cb7df5a18c652
         'B' => 
         array (
             'Brick\\Math\\' => 11,
+        ),
+        'A' => 
+        array (
+            'App\\' => 4,
         ),
     );
 
@@ -434,8 +437,8 @@ class ComposerStaticInit4c2f2a9d77dd459d860cb7df5a18c652
         ),
         'Psr\\Http\\Message\\' => 
         array (
-            0 => __DIR__ . '/..' . '/psr/http-factory/src',
-            1 => __DIR__ . '/..' . '/psr/http-message/src',
+            0 => __DIR__ . '/..' . '/psr/http-message/src',
+            1 => __DIR__ . '/..' . '/psr/http-factory/src',
         ),
         'Psr\\Http\\Client\\' => 
         array (
@@ -480,10 +483,6 @@ class ComposerStaticInit4c2f2a9d77dd459d860cb7df5a18c652
         'NunoMaduro\\Collision\\' => 
         array (
             0 => __DIR__ . '/..' . '/nunomaduro/collision/src',
-        ),
-        'Newvendor\\Vendor\\' => 
-        array (
-            0 => __DIR__ . '/../..' . '/src',
         ),
         'Monolog\\' => 
         array (
@@ -654,6 +653,10 @@ class ComposerStaticInit4c2f2a9d77dd459d860cb7df5a18c652
         'Brick\\Math\\' => 
         array (
             0 => __DIR__ . '/..' . '/brick/math/src',
+        ),
+        'App\\' => 
+        array (
+            0 => __DIR__ . '/../..' . '/app',
         ),
     );
 
