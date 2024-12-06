@@ -759,7 +759,7 @@ $app->post('/submit', function ($request, $response) use ($productCollection) {
 
     try {
         // Path to the OAuth credentials JSON file
-        $credentialsPath = 'C:/Users/Hp/Documents/FullAMrketPlace(JU) - Copy/BackEnd/credential.json';
+        $credentialsPath = 'https://drive.google.com/drive/folders/1rBtTemhAzhwh3X68Kxg74NHgH5cF_U1j/Credentials.json';
             
         if (!file_exists($credentialsPath)) {
             throw new Exception('Credentials file not found at ' . $credentialsPath);
@@ -852,7 +852,7 @@ $app->get('/generate-pdf/{orderDetails}', function ($request, $response, $args) 
 
     try {
         // Path to the OAuth credentials JSON file
-        $credentialsPath = 'C:/Users/Hp/Documents/FullAMrketPlace(JU) - Copy/BackEnd/credential.json';
+        $credentialsPath = 'https://drive.google.com/drive/folders/1rBtTemhAzhwh3X68Kxg74NHgH5cF_U1j/Credentials.json';
         $client = new Google_Client();
         $client->setAuthConfig($credentialsPath);
         $client->addScope(Google_Service_Drive::DRIVE_READONLY);
