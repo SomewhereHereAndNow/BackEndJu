@@ -3,6 +3,8 @@
 // Autoload dependencies
 require 'vendor/autoload.php';
 
+use Google\Client;
+use Google\Service\Drive;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 use Slim\Factory\AppFactory;
@@ -11,10 +13,38 @@ use Slim\Views\PhpRenderer;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Razorpay\Api\Api;
+use Dompdf\Dompdf;
+use Dompdf\Options;
  
 
-// Start the session
-session_start();
+class GridFSService
+{
+    protected $bucket;
+
+    public function __construct()
+    {
+        $client = new Client($_ENV['DB_URI']);
+        $database = $client->selectDatabase($_ENV['DB_DATABASE']);
+        $this->bucket = $database->selectGridFSBucket();
+    }
+
+    public function uploadPrice($price, $productId)
+    {
+        $stream = fopen('php://memory', 'r+');
+        fwrite($stream, $price);
+        rewind($stream);
+
+        return $this->bucket->uploadFromStream($productId . '_price', $stream);
+    }
+
+    public function downloadPrice($productId)
+    {
+        $stream = $this->bucket->openDownloadStreamByName($productId . '_price');
+        return stream_get_contents($stream);
+    }
+}
+
+ 
  
 $port = getenv('PORT') ?: 8080;
 
@@ -22,6 +52,25 @@ $razorpayApiKey = "rzp_test_SGmdC8LUxtlgND";
 $razorpayApiSecret = "T3pymnZ9BZk81wpuoAsLgyOC";  
 $razorpay = new Api($razorpayApiKey, $razorpayApiSecret);
 $user_name;
+function addCorsHeaders($response) {
+   // Frontend domain
+
+    // Set CORS headers to allow only the frontend domain
+    $response = $response->withHeader("Access-Control-Allow-Origin", "*");
+    $response = $response->withHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    $response = $response->withHeader("Access-Control-Allow-Headers", "X-Requested-With, Content-Type, Accept, Origin, Authorization");
+
+    // If you're handling cookies or authentication, add:
+    $response = $response->withHeader("Access-Control-Allow-Credentials", "true");
+
+    // Handle preflight (OPTIONS) requests
+    if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+        $response = $response->withStatus(200);
+        return $response; // Return the response after setting the status
+    }
+
+    return $response; // Return the modified response
+}
 function CheckSuperUserData1($userCollection, $data, $response) {
     // Extract name and password from data
     $userId = $data['name'] ?? null;
@@ -168,29 +217,52 @@ function CheckData($userCollection, $data, $response)
 
  
 
-// Function to add a product to the MongoDB collection
-function addProduct($productCollection, $data) {
+// Function to add a product to the MongoDB collection with GridFS for the PDF
+function addProduct($productCollection, $data, $response, $uploadedFile) {
     try {
-        // Insert the product into the collection
-        $result = $productCollection->insertOne($data);
+        // Handle the uploaded file
+        if ($uploadedFile instanceof Slim\Psr7\UploadedFile) {
+            // Retrieve file details
+            $fileName = $uploadedFile->getClientFilename();
+            $filePath = __DIR__ . '/uploads/' . $fileName;
 
-        // Return success response with inserted ID
+            // Move the file to the designated location
+            $uploadedFile->moveTo($filePath);
+        } else {
+            return [
+                'status' => 400,
+                'body' => ['message' => 'Invalid file upload']
+            ];
+        }
+
+        // Prepare the data for database insertion
+        $productData = [
+            'name' => $data['name'] ?? '',
+            'description' => $data['description'] ?? '',
+            'type' => $data['type'] ?? '',
+            'image' => $data['image'] ?? '',
+            'availableQuant' => $data['availableQuant'] ?? '',
+            'pricePDFPath' => $filePath, // Store the file path in the database
+        ];
+
+        // Insert into MongoDB
+        $result = $productCollection->insertOne($productData);
+
         return [
-            'status' => 201, // HTTP status for created
+            'status' => 201,
             'body' => [
                 'message' => 'Product added successfully',
-                'product_id' => $result->getInsertedId() // Return the inserted product's ID
+                'id' => (string) $result->getInsertedId()
             ]
         ];
     } catch (Exception $e) {
-        // Log and return error response in case of failure
-        error_log("Error inserting product: " . $e->getMessage());
         return [
-            'status' => 500, // HTTP status for internal server error
-            'body' => ['error' => 'Error inserting product']
+            'status' => 500,
+            'body' => ['message' => 'Failed to add product', 'error' => $e->getMessage()]
         ];
     }
 }
+
 
 // Create the Slim app
 $app = AppFactory::create();
@@ -229,10 +301,10 @@ $app->addBodyParsingMiddleware();
 
         // Return the order details
         $response->getBody()->write(json_encode(['order_id' => $order['id']]));
-        return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
+        return addCorsHeaders($response)->withStatus(201)->withHeader('Content-Type', 'application/json');
     } catch (Exception $e) {
         $response->getBody()->write(json_encode(['error' => 'Error creating order: ' . $e->getMessage()]));
-        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+        return addCorsHeaders($response)->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 });
  
@@ -281,40 +353,9 @@ $app->post('/api/razorpay/verify', function (Request $request, Response $respons
 });
  
  
-// CORS Middleware: Allow all origins and set the proper headers
-$app->add(function ($request, $handler) {
-    $response = $handler->handle($request);
-    if ($request->getMethod() === 'OPTIONS') {
-        return $response
-            ->withHeader('Access-Control-Allow-Origin', '*') // Adjust as necessary for security
-            ->withHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Accept, Origin, Authorization')
-            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-            ->withStatus(200); // Return 200 status for OPTIONS request
-    }
-    // Set the CORS headers for the response
-    $response = $response
-        ->withHeader('Access-Control-Allow-Origin', '*') // Allow all origins, adjust as needed
-        ->withHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Accept, Origin, Authorization')
-        ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-
-     
-
-    return $response;
-});
  
 
-// DELETE route for deleting a product by ID
- // DELETE route for deleting a product by ID
  
-
-
-// Custom session middleware to ensure session is started
-$app->add(function ($request, $handler) {
-    if (session_status() == PHP_SESSION_NONE) {
-        session_start();
-    }
-    return $handler->handle($request);
-});
 
 // MongoDB connection
 $mongoClient = new MongoDB\Client(
@@ -456,10 +497,10 @@ $app->post('/update_product_stock', function ($request, $response) use ($product
 
     if ($updateResult->getModifiedCount() > 0) {
         $response->getBody()->write(json_encode(['success' => true, 'message' => 'Stock updated successfully']));
-        return addCorsHeaders($response)->withHeader('Content-Type', 'application/json');
+        return addCorsHeaders($response)->withHeader('Content-Type', 'application/json')->withStatus(200);
     } else {
         $response->getBody()->write(json_encode(['success' => false, 'message' => 'No changes made']));
-        return addCorsHeaders($response)->withHeader('Content-Type', 'application/json');
+        return addCorsHeaders($response)->withHeader('Content-Type', 'application/json')->withStatus(200);
     }
 });
 
@@ -521,7 +562,7 @@ $app->get("/send_email", function ($request, $response) use ($userCollection) {
             $mail->Host = 'smtp.gmail.com';
             $mail->SMTPAuth = true;
             $mail->Username = 'maitreyaguptaa@gmail.com'; // Your Gmail address
-            $mail->Password = 'atkx kvlg injl ilps'; // Your Gmail password (use an app-specific password if 2FA is enabled)
+            $mail->Password = 'shum svsm fodr ogki'; // Your Gmail password (use an app-specific password if 2FA is enabled)
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
             $mail->Port = 587;
 
@@ -598,12 +639,12 @@ function seedDatabase($productCollection) {
 // GET route for fetching all products
  
 $app->options('/api/products',function (Request $request, Response $response){
-    return addCorsHeaders($response)->withHeader('Content-Type', 'application/json');
+    return addCorsHeaders($response)->withHeader('Content-Type', 'application/json')->withStatus(200);
 });
 $app->get('/api/products', function (Request $request, Response $response) use ($productCollection) {
     $products = $productCollection->find()->toArray();
     $response->getBody()->write(json_encode($products));
-    return $response->withHeader('Content-Type', 'application/json');
+    return addCorsHeaders($response)->withHeader('Content-Type', 'application/json')->withStatus(200);
 });
 
 // POST route for handling form submissions
@@ -618,7 +659,7 @@ $app->post('/api/products', function ($request,$response) use ($productCollectio
     if (empty($data['name']) || empty($data['type']) || empty($data['price'])) {
         // Send an error response if data is invalid
         $response->getBody()->write(json_encode(['error' => 'Invalid input']));
-        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        return addCorsHeaders($response)->withStatus(400)->withHeader('Content-Type', 'application/json');
     }
 
     try {
@@ -630,14 +671,14 @@ $app->post('/api/products', function ($request,$response) use ($productCollectio
 
         // Send success response
         $response->getBody()->write(json_encode(['message' => 'Product added successfully']));
-        return $response->withHeader('Content-Type', 'application/json')->withStatus(201);
+        return addCorsHeaders($response)->withHeader('Content-Type', 'application/json')->withStatus(201);
     } catch (Exception $e) {
         // Log any errors
         error_log("Error inserting product: " . $e->getMessage());
 
         // Send error response
         $response->getBody()->write(json_encode(['error' => 'Error inserting product']));
-        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+        return addCorsHeaders($response)->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 });
  
@@ -648,44 +689,212 @@ $app->post('/api/products', function ($request,$response) use ($productCollectio
 // Home route for testing
 $app->get('/', function ($request, $response) {
     $response->getBody()->write("Home Route Reached Successfully");
-    return $response
-    ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type')
-        ->withStatus(200);;
+    return addCorsHeaders($response)->withStatus(200);
+     
 });
 $app->options('/', function($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
+    return addCorsHeaders($response)->withStatus(200);
+         
 });
 $app->options('/submit', function ($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type')
-        ->withStatus(200);
+    return addCorsHeaders($response)->withStatus(200);
 });
+$app->get('/oauth2callback', function ($request, $response) {
+    $queryParams = $request->getQueryParams();
+
+    if (isset($queryParams['code'])) {
+        $authCode = $queryParams['code'];
+
+        // Load the Google Client
+        $client = new Google_Client();
+        
+        // Use __DIR__ to ensure the path is relative to the current script's location
+        $client->setAuthConfig(__DIR__ . '/credential.json');
+        $client->addScope(Google_Service_Drive::DRIVE_FILE);
+        $client->setRedirectUri('http://localhost:3001/oauth2callback');
+
+        // Exchange authorization code for access token
+        $accessToken = $client->fetchAccessTokenWithAuthCode($authCode);
+
+        if (isset($accessToken['error'])) {
+            return $response->write(json_encode(('Error retrieving access token: ' . $accessToken['error'])));
+        }
+
+        // Ensure the 'Credential' directory exists
+        $tokenDirectory = __DIR__ . '/Credential';
+        if (!is_dir($tokenDirectory)) {
+            mkdir($tokenDirectory, 0777, true);  // Create directory with appropriate permissions
+        }
+
+        // Save the token for future use
+        file_put_contents($tokenDirectory . '/token.json', json_encode($accessToken));
+
+        return addCorsHeaders($response)->getBody()->write(json_encode(('Authorization successful! You can now use the Google Drive API.')));
+    }
+
+    return addCorsHeaders($response)->write(json_encode(('Authorization failed or canceled.')));
+});
+
+
+$app->options('/oauth2callback', function ($request, $response) {
+    return addCorsHeaders($response)->withStatus(200);
+});
+
+
 $app->post('/submit', function ($request, $response) use ($productCollection) {
     $data = $request->getParsedBody();
-    $result = addProduct($productCollection, $data,$response);
-   
+    $uploadedFiles = $request->getUploadedFiles();
 
-    // Set CORS headers
-    $response = $response
-        ->withHeader('Access-Control-Allow-Origin', '*')  // Your frontend origin
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // Handle file upload
+    $pricePDF = $uploadedFiles['pricePDF'] ?? null;
 
-    // Write the response based on the result from addProduct
-    $response->getBody()->write(json_encode($result['body']));
-    return $response
-        ->withHeader('Content-Type', 'application/json')
-        ->withStatus($result['status']);
-});
+    if (!$pricePDF) {
+        $response->getBody()->write(json_encode([
+            'message' => 'Price PDF is required',
+        ]));
+        return $response
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus(400);
+    }
+
+    try {
+        // Path to the OAuth credentials JSON file
+        $credentialsPath = 'C:/Users/Hp/Documents/FullAMrketPlace(JU) - Copy/BackEnd/credential.json';
+            
+        if (!file_exists($credentialsPath)) {
+            throw new Exception('Credentials file not found at ' . $credentialsPath);
+        }
+
+        // Initialize the Google Client
+        $client = new Google_Client();
+        $client->setAuthConfig($credentialsPath);
+        $client->addScope(Google_Service_Drive::DRIVE_FILE);
+        $client->setAccessType('offline');
+        $client->setPrompt('select_account consent');
+
+        // Token storage
+        $tokenPath = __DIR__ . '\Credential\token.json';
+
+        if (file_exists($tokenPath)) {
+            $accessToken = json_decode(file_get_contents($tokenPath), true);
+            $client->setAccessToken($accessToken);
+        }
+
+        // Refresh the token if expired
+        if ($client->isAccessTokenExpired()) {
+            if ($client->getRefreshToken()) {
+                $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+            } else {
+                // Request authorization
+                $authUrl = $client->createAuthUrl();
+                throw new Exception("Please authorize the app by visiting this URL: $authUrl");
+            }
+
+            // Save the new token
+            file_put_contents($tokenPath, json_encode($client->getAccessToken()));
+        }
+
+        // Create the Drive service
+        $service = new Google_Service_Drive($client);
+
+        // File upload (the file uploaded in 'pricePDF' is now considered the 'price')
+        $stream = $pricePDF->getStream();
+        $fileMetadata = new Google_Service_Drive_DriveFile([
+            'name' => $pricePDF->getClientFilename(),
+        ]);
+
+        // Upload the file to Google Drive
+        $driveFile = $service->files->create($fileMetadata, [
+            'data' => $stream->getContents(),
+            'mimeType' => $pricePDF->getClientMediaType(),
+            'uploadType' => 'multipart',
+        ]);
+
+        // Prepare the product data with the Google Drive file ID stored as 'price'
+        $productData = [
+            'name' => $data['name'],             // Assuming 'name' is part of the form data
+            'type' => $data['type'],             // Assuming 'type' is part of the form data
+            'description' => $data['description'], // Assuming 'description' is part of the form data
+            'price' => $driveFile->getId(),      // Store the Google Drive file ID as 'price'
+            'image' => $data['image'],           // Assuming 'image' is part of the form data
+            'created_at' => new \MongoDB\BSON\UTCDateTime(),  // Store the current timestamp
+        ];
+
  
+
+        // Insert the product into the 'productCollection'
+        $insertResult = $productCollection->insertOne($productData);
+
+        // Return success response
+        $response->getBody()->write(json_encode([
+            'message' => 'File uploaded successfully to Google Drive and product added.',
+            'file_id' => $driveFile->getId(),
+            'product_id' => (string) $insertResult->getInsertedId(),  // Return the product ID from MongoDB
+        ]));
+        return addCorsHeaders($response)
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus(200);
+
+    } catch (Exception $e) {
+        addCorsHeaders($response)->getBody()->write(json_encode([
+            'message' => 'Error uploading file to Google Drive and adding product: ' . $e->getMessage(),
+        ]));
+        return addCorsHeaders($response)
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus(500);
+    }
+});
+$app->options('/generte-pdf',function($request,$response){
+    return addCorsHeaders($response)->withStatus(200);
+});
+$app->get('/generate-pdf/{orderDetails}', function ($request, $response, $args) {
+    $fileId = $args['orderDetails'];
+
+    try {
+        // Path to the OAuth credentials JSON file
+        $credentialsPath = 'C:/Users/Hp/Documents/FullAMrketPlace(JU) - Copy/BackEnd/credential.json';
+        $client = new Google_Client();
+        $client->setAuthConfig($credentialsPath);
+        $client->addScope(Google_Service_Drive::DRIVE_READONLY);
+
+        // Token storage
+        $tokenPath = __DIR__ . '/Credential/token.json';
+        if (file_exists($tokenPath)) {
+            $accessToken = json_decode(file_get_contents($tokenPath), true);
+            $client->setAccessToken($accessToken);
+        }
+
+        if ($client->isAccessTokenExpired()) {
+            if ($client->getRefreshToken()) {
+                $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+            } else {
+                return $response->withStatus(403)->write('Access token expired.');
+            }
+        }
+
+        $service = new Google_Service_Drive($client);
+
+        // Download the file from Google Drive
+        $file = $service->files->get($fileId, ['alt' => 'media']);
+
+        // Get the stream content
+        $fileStream = $file->getBody();
+        $fileContent = $fileStream->getContents(); // Read stream into a string
+        
+        $response->getBody()->write($fileContent); // Write the string content
+
+        return addCorsHeaders($response)
+            ->withHeader('Content-Type', 'application/pdf')
+            ->withHeader('Content-Disposition', 'attachment; filename="price_details.pdf"')
+            ->withStatus(200);
+    } catch (Exception $e) {
+        addCorsHeaders($response)->getBody()->write(json_encode(['error' => $e->getMessage()]));
+        return $response->withStatus(500);
+    }
+});
+
+
+
 $app->post('/login', function ($request, $response) use ($userCollection) {
  
 
@@ -708,60 +917,41 @@ $app->post('/login', function ($request, $response) use ($userCollection) {
      
 
     $response=CheckData($userCollection, $data, $response);
-    return $response
-    ->withHeader('Access-Control-Allow-Origin', '*')  // Allow all origins, adjust if needed
-    ->withHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Accept, Origin, Authorization')
-    ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    return addCorsHeaders($response)->withStatus(200);
+    
 });
 
 $app->post('/signup',function($request , $response) use ($userCollection){
     $data=$request->getParsedBody();
 
     $response=AddUserData($userCollection,$data,$response);
-    return $response
-    ->withHeader('Access-Control-Allow-Origin', '*')  // Allow all origins, adjust if needed
-    ->withHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Accept, Origin, Authorization')
-    ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    return addCorsHeaders($response)->withStatus(200);
+   
 });
  
 
 $app->options('/login', function($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
+    return addCorsHeaders($response)->withStatus(200);
 });
 
 $app->options('/signup', function($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
+    return addCorsHeaders($response)->withStatus(200);
+         
 });
 $app->options('/LogInMayukh', function($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
+    return addCorsHeaders($response)->withStatus(200);
+        
 });
 $app->options('/LogInInventory', function($request, $response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        ->withStatus(200);
+    return addCorsHeaders($response)->withStatus(200);
+         
 });
 $app->post('/LogInInventory',function($request,$response) use ($userCollection){
     $data=$request->getParsedBody();
 
     $response=CheckSuperUserData1($userCollection,$data,$response);
-    return $response
-    ->withHeader('Access-Control-Allow-Origin', '*')
-    ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-    ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return addCorsHeaders($response)->withStatus(200);
+ 
 });
  
 
@@ -769,28 +959,20 @@ $app->post('/LogInMayukh',function($request,$response) use ($userCollection){
     $data=$request->getParsedBody();
 
     $response=CheckSuperUserData($userCollection,$data,$response);
-    return $response
-    ->withHeader('Access-Control-Allow-Origin', '*')
-    ->withHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-    ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return addCorsHeaders($response)->withStatus(200);
+     
 });
  
  // Helper function to apply CORS headers
-function addCorsHeaders($response) {
-    return $response
-        ->withHeader('Access-Control-Allow-Origin', '*') // Allow all origins; replace '*' with specific origin if needed
-        ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-}
-
+  
+ // Helper function to apply CORS headers
+ 
  
 
 $app->post("/api/products/modify", function($request, $response) use ($productCollection) {
     // Set CORS headers
-    $response = $response
-        ->withHeader('Access-Control-Allow-Origin', '*')
-        ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        ->withHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    $response = addCorsHeaders($response)->withStatus(200);
+         
     
     // Handle OPTIONS request
     if ($request->getMethod() === 'OPTIONS') {

@@ -18,7 +18,7 @@ return [
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
 
     'allowed_methods' => ['*'],
-    'allowed_origins' => ['http://localhost:3000','http://localhost:3001','http://localhost:3002','http://localhost:3003','http://localhost:3004','http://localhost:3005','127.0.0.1:3000','127.0.0.1:3001'], 
+    'allowed_origins' => ['https://cartpage-g20s.onrender.com'], 
    
 
     'allowed_origins_patterns' => [],
